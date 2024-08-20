@@ -162,8 +162,6 @@ else:
 # ---------
 #
 
-ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
-
 configs = []
 configs.append(
     triton.testing.Benchmark(
@@ -176,7 +174,8 @@ configs.append(
         line_names=["Torch", "Triton"],  # Line styles
         styles=[("green", "-"), ("blue", "-")],
         ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="gated-ffn-pt1-performance-fp16" # Name for the plot, used also as a file name for saving the plot.
+        plot_name="gated-ffn-pt1-performance-fp16", # Name for the plot, used also as a file name for saving the plot.
+        args={}
     ))
 
 
