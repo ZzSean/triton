@@ -128,11 +128,11 @@ def fused_gated_ffn_pt1(x, w_g, w_fc):
     # Allocates output.
     y = torch.empty((B, M, N), device=a.device, dtype=x.dtype)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), B)
-    fused_gated_ffn_kernel[grid](
+    fused_gated_ffn_pt1_kernel[grid](
         x, w_g, w_fc, y,
         M, N, K,
         x.stride(0), x.stride(1), x.stride(2),
-        w_g.stride(0), b.stride(1),
+        w_g.stride(0), w_g.stride(1),
         y.stride(0), y.stride(1), y.stride(2),
     )
     return y
