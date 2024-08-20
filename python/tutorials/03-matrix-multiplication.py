@@ -9,7 +9,7 @@ from triton.language.math import (
 
 
 def naive_torch_gated_ffn_pt1(x, w_g, w_fc):
-    gate = torch.nn.SiLU(torch.matmul(x, w_g))
+    gate = torch.nn.functional.silu(torch.matmul(x, w_g))
     fc = torch.matmul(x, w_fc)
     y = gate * fc
     return y
@@ -107,8 +107,8 @@ def fused_gated_ffn_pt1_kernel(
         w_g_ptrs += BLOCK_SIZE_K * stride_wk
         w_fc_ptrs += BLOCK_SIZE_K * stride_wk
     accumulator_g = fast_silu(accumulator_g)
-    hadamard_product = accumulator_g * accumulator_fc
-    y = hadamard_product.to(tl.float16)
+    y = accumulator_g.to(tl.float16) * accumulator_fc.to(tl.float16)
+    #y = hadamard_product.to(tl.float16)
 
     offset_ym = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offset_yn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -126,7 +126,7 @@ def fused_gated_ffn_pt1(x, w_g, w_fc):
     B, M, K = x.shape
     K, N = w_g.shape
     # Allocates output.
-    y = torch.empty((B, M, N), device=a.device, dtype=x.dtype)
+    y = torch.empty((B, M, N), device=x.device, dtype=x.dtype)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), B)
     fused_gated_ffn_pt1_kernel[grid](
         x, w_g, w_fc, y,
