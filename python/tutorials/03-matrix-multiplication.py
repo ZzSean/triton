@@ -25,41 +25,16 @@ def is_cuda():
 
 
 def get_cuda_autotune_config():
-    return [
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
-        # Good config for fp8 inputs.
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=3,
-                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4)
+    configs = [
+        triton.Config({"BLOCK_SIZE_M": BM, "BLOCK_SIZE_N": BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": GM}, num_stages=s, num_warps=w)  \
+        for BM in [64, 128]  \
+        for BN in [64, 128]  \
+        for BK in [32]  \
+        for GM in [8]  \
+        for s in [2, 4]  \
+        for w in [4, 8]
     ]
+    return configs
 
 
 @triton.autotune(
@@ -107,8 +82,8 @@ def fused_gated_ffn_pt1_kernel(
         w_g_ptrs += BLOCK_SIZE_K * stride_wk
         w_fc_ptrs += BLOCK_SIZE_K * stride_wk
     accumulator_g = fast_silu(accumulator_g)
-    y = accumulator_g.to(tl.float16) * accumulator_fc.to(tl.float16)
-    #y = hadamard_product.to(tl.float16)
+    hadamard_product = accumulator_g * accumulator_fc
+    y = hadamard_product.to(tl.float16)
 
     offset_ym = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offset_yn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -135,6 +110,7 @@ def fused_gated_ffn_pt1(x, w_g, w_fc):
         w_g.stride(0), w_g.stride(1),
         y.stride(0), y.stride(1), y.stride(2),
     )
+    #print(fused_gated_ffn_pt1_kernel.best_config)
     return y
 
 
@@ -144,9 +120,9 @@ def fused_gated_ffn_pt1(x, w_g, w_fc):
 #
 
 torch.manual_seed(0)
-x = torch.randn((32, 256, 256), device='cuda', dtype=torch.float16)
-w_g = torch.randn((256, 256), device='cuda', dtype=torch.float16)
-w_fc = torch.randn((256, 256), device='cuda', dtype=torch.float16)
+x = torch.randn((128, 256, 2048), device='cuda', dtype=torch.float16)
+w_g = torch.randn((2048, 4096), device='cuda', dtype=torch.float16)
+w_fc = torch.randn((2048, 4096), device='cuda', dtype=torch.float16)
 triton_output = fused_gated_ffn_pt1(x, w_g, w_fc)
 torch_output = naive_torch_gated_ffn_pt1(x, w_g, w_fc)
 print(f"triton_output_with_fp16_inputs={triton_output}")
@@ -166,7 +142,7 @@ configs = []
 configs.append(
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
-        x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+        x_vals=[(256, 4096, 2048), (384, 4096, 2048), (512, 4096, 2048), (640, 4096, 2048), (2048, 512, 256), (2048, 1532, 768), (4096, 512, 256), (4096, 1532, 768), (5120, 512, 256), (5120, 1532, 768)],  # Different possible values for `x_name`
         line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
         # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
@@ -181,7 +157,7 @@ configs.append(
 
 @triton.testing.perf_report(configs)
 def benchmark(M, N, K, provider):
-    x = torch.randn((27, M, K), device='cuda', dtype=torch.float16)
+    x = torch.randn((128, M, K), device='cuda', dtype=torch.float16)
     w_g = torch.randn((K, N), device='cuda', dtype=torch.float16)
     w_fc = torch.randn((K, N), device='cuda', dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
@@ -189,7 +165,8 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_torch_gated_ffn_pt1(x, w_g, w_fc), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: fused_gated_ffn_pt1(x, w_g, w_fc), quantiles=quantiles)
-    perf = lambda ms: 4 * M * N * K * 1e-12 / (ms * 1e-3)
+    #perf = lambda ms: 4 * M * N * K * 1e-12 / (ms * 1e-3)
+    perf = lambda ms: ms * 1e-3
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
