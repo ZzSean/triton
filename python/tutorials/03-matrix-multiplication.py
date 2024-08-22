@@ -24,7 +24,7 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
-def get_cuda_autotune_config():
+def get_autotune_config():
     configs = [
         triton.Config({"BLOCK_SIZE_M": BM, "BLOCK_SIZE_N": BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": GM}, num_stages=s, num_warps=w)  \
         for BM in [64, 128]  \
@@ -38,7 +38,7 @@ def get_cuda_autotune_config():
 
 
 @triton.autotune(
-    configs=get_cuda_autotune_config(),
+    configs=get_autotune_config(),
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -141,16 +141,17 @@ else:
 configs = []
 configs.append(
     triton.testing.Benchmark(
-        x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
-        x_vals=[(256, 4096, 2048), (384, 4096, 2048), (512, 4096, 2048), (640, 4096, 2048), (2048, 512, 256), (2048, 1532, 768), (4096, 512, 256), (4096, 1532, 768), (5120, 512, 256), (5120, 1532, 768)],  # Different possible values for `x_name`
-        line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
-        # Possible values for `line_arg`
-        # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
-        line_vals=["torch", "triton"],  # Label name for the lines
-        line_names=["Torch", "Triton"],  # Line styles
+        x_names=["M", "N", "K"],
+        x_vals=[(256, 4096, 2048), (384, 4096, 2048), (512, 4096, 2048),
+                (640, 4096, 2048), (2048, 512, 256), (2048, 1532, 768),
+                (4096, 512, 256), (4096, 1532, 768), (5120, 512, 256),
+                (5120, 1532, 768)],
+        line_arg="provider",
+        line_vals=["torch", "triton"],
+        line_names=["Torch", "Triton"],
         styles=[("green", "-"), ("blue", "-")],
-        ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="gated-ffn-pt1-performance-fp16", # Name for the plot, used also as a file name for saving the plot.
+        ylabel="ms",
+        plot_name="gated-ffn-pt1-performance-fp16",
         args={}
     ))
 
@@ -165,9 +166,7 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_torch_gated_ffn_pt1(x, w_g, w_fc), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: fused_gated_ffn_pt1(x, w_g, w_fc), quantiles=quantiles)
-    #perf = lambda ms: 4 * M * N * K * 1e-12 / (ms * 1e-3)
-    perf = lambda ms: ms * 1e-3
-    return perf(ms), perf(max_ms), perf(min_ms)
+    return ms, max_ms, min_ms
 
 
 benchmark.run(show_plots=True, print_data=True)
